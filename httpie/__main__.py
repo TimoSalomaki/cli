@@ -17,10 +17,3 @@ return exit_status.value
 if __name__ == '__main__':  # pragma: nocover
     import sys
     sys.exit(main())
-
-
-
-
-"""The main entry point. Invoke as `http' or `python -m httpie'.
-
-"""
