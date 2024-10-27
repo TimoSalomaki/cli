@@ -565,7 +565,7 @@ output_options.add_argument(
     '--quiet',
     '-q',
     action='count',
-    default=0, #HACKATHON
+    default=1,
     short_help='Do not print to stdout or stderr, except for errors and warnings when provided once.',
     help="""
     Do not print to stdout or stderr, except for errors and warnings when provided once.
@@ -729,7 +729,7 @@ network.add_argument(
 network.add_argument(
     '--follow',
     '-F',
-    default=True, #Hackathon
+    default=True,
     action='store_true',
     short_help='Follow 30x Location redirects.'
 )
