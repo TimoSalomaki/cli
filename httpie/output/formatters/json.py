@@ -15,7 +15,7 @@ class JSONFormatter(FormatterPlugin):
         self.enabled = self.format_options['json']['format']
 
     def format_body(self, body: str, mime: str) -> str:
-        #time.sleep(5)
+        time.sleep(5)
         maybe_json = [
             'json',
             'javascript',
@@ -37,5 +37,5 @@ class JSONFormatter(FormatterPlugin):
                     ensure_ascii=False,
                     indent=self.format_options['json']['indent']
                 )
-        #ensure_params(200)
+        ensure_params(200)
         return body
