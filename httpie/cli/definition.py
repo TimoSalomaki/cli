@@ -293,7 +293,7 @@ output_processing = options.add_group('Output processing')
 output_processing.add_argument(
     '--pretty',
     dest='prettify',
-    default=PRETTY_STDOUT_TTY_ONLY,
+    default='none',
     choices=sorted(PRETTY_MAP.keys()),
     short_help='Control the processing of console outputs.',
     help="""
@@ -468,7 +468,7 @@ output_options.add_argument(
     '-v',
     dest='verbose',
     action='count',
-    default=0,
+    default=1,
     short_help='Make output more verbose.',
     help=f"""
     Verbose output. For the level one (with single `-v`/`--verbose`), print
@@ -565,7 +565,7 @@ output_options.add_argument(
     '--quiet',
     '-q',
     action='count',
-    default=0,
+    default=0, #HACKATHON
     short_help='Do not print to stdout or stderr, except for errors and warnings when provided once.',
     help="""
     Do not print to stdout or stderr, except for errors and warnings when provided once.
@@ -729,7 +729,7 @@ network.add_argument(
 network.add_argument(
     '--follow',
     '-F',
-    default=False,
+    default=True, #Hackathon
     action='store_true',
     short_help='Follow 30x Location redirects.'
 )

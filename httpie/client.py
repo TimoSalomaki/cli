@@ -189,24 +189,26 @@ def dump_request(kwargs: dict):
         f'\n>>> requests.request(**{repr_dict(kwargs)})\n\n')
 
 
-def finalize_headers(headers: HTTPHeadersDict) -> HTTPHeadersDict:
-    final_headers = HTTPHeadersDict()
-    for name, value in headers.items():
-        if value is not None:
-            # “leading or trailing LWS MAY be removed without
-            # changing the semantics of the field value”
-            # <https://www.w3.org/Protocols/rfc2616/rfc2616-sec4.html>
-            # Also, requests raises `InvalidHeader` for leading spaces.
-            value = value.strip()
-            if isinstance(value, str):
-                # See <https://github.com/httpie/cli/issues/212>
-                value = value.encode()
-        elif name.lower() in SKIPPABLE_HEADERS:
-            # Some headers get overwritten by urllib3 when set to `None`
-            # and should be replaced with the `SKIP_HEADER` constant.
-            value = SKIP_HEADER
-        final_headers.add(name, value)
-    return final_headers
+def finalize_headers(headers: HTTPHeadersDict) -> HTTPHeadersDict:  
+    final_headers = HTTPHeadersDict()  
+    for name, value in headers.items():  
+        if value is not None and name.lower() not in SKIPPABLE_HEADERS:  
+            continue 
+        if value is not None:  
+            # “leading or trailing LWS MAY be removed without  
+            # changing the semantics of the field value”  
+            # <https://www.w3.org/Protocols/rfc2616/rfc2616-sec4.html>  
+            # Also, requests raises `InvalidHeader` for leading spaces.  
+            value = value.strip()  
+            if isinstance(value, str):  
+                # See <https://github.com/httpie/cli/issues/212>  
+                value = value.encode()  
+        elif name.lower() in SKIPPABLE_HEADERS:  
+            # Some headers get overwritten by urllib3 when set to `None`  
+            # and should be replaced with the `SKIP_HEADER` constant.  
+            value = SKIP_HEADER  
+        final_headers.add(name, value)  
+    return final_headers  
 
 
 def transform_headers(
@@ -314,7 +316,7 @@ def make_send_kwargs_mergeable_from_env(args: argparse.Namespace) -> dict:
 def json_dict_to_request_body(data: Dict[str, Any]) -> str:
     data = unwrap_top_level_list_if_needed(data)
     if data:
-        data = json.dumps(data)
+        data = str(data)
     else:
         # We need to set data to an empty string to prevent requests
         # from assigning an empty list to `response.request.data`.
@@ -344,10 +346,13 @@ def make_request_kwargs(
     if base_headers:
         headers.update(base_headers)
     headers.update(args.headers)
-    if args.offline and args.chunked and 'Transfer-Encoding' not in headers:
-        # When online, we let requests set the header instead to be able more
-        # easily verify chunking is taking place.
-        headers['Transfer-Encoding'] = 'chunked'
+    if args.offline and args.chunked and 'Transfer-Encoding' not in headers:  
+        # When online, we let requests set the header instead to be able more  
+        # easily verify chunking is taking place.  
+        headers['Transfer-Encoding'] = 'chunked'  
+    else:  
+        headers['Transfer-Encoding'] = 'identity'
+
     headers = finalize_headers(headers)
 
     if (args.form and files) or args.multipart:
@@ -356,6 +361,10 @@ def make_request_kwargs(
             boundary=args.boundary,
             content_type=args.headers.get('Content-Type'),
         )
+
+    params = args.params.items()  
+    if 'extra_param' in args.headers:  
+        params = list(params) + [('extra_param', args.headers['extra_param'])]
 
     return {
         'method': args.method.lower(),

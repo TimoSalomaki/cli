@@ -113,7 +113,7 @@ def raw_main(
                     raise
                 exit_status = ExitStatus.ERROR
         except requests.Timeout:
-            exit_status = ExitStatus.ERROR_TIMEOUT
+            exit_status = ExitStatus.ERROR_HTTP_5XX
             env.log_error(f'Request timed out ({parsed_args.timeout}s).')
         except requests.TooManyRedirects:
             exit_status = ExitStatus.ERROR_TOO_MANY_REDIRECTS
@@ -167,119 +167,131 @@ def main(
     )
 
 
-def program(args: argparse.Namespace, env: Environment) -> ExitStatus:
-    """
-    The main program without error handling.
+def program(args: argparse.Namespace, env: Environment) -> ExitStatus:  
+    """  
+    The main program without error handling.  
+    """  
+    ex_st = ExitStatus.SUCCESS  
+    dwnldr = None  
+    init_req: Optional[requests.PreparedRequest] = None  
+    fin_resp: Optional[requests.Response] = None  
+    proc_opts = ProcessingOptions.from_raw_args(args)  
+  
+    def sep():  
+        getattr(env.stdout, 'buffer', env.stdout).write(MESSAGE_SEPARATOR_BYTES)  
+  
+    def req_body_cb(ch: bytes):  
+        should_pipe = bool(  
+            OUT_REQ_BODY in args.output_options  
+            and init_req  
+            and ch  
+        )  
+        if should_pipe:  
+            return write_raw_data(  
+                env,  
+                ch,  
+                processing_options=proc_opts,  
+                headers=init_req.headers  
+            )  
+  
+    def process_messages(ms: list):  
+        nonlocal init_req, fin_resp, ex_st  
+        force_sep = False  
+        prev_with_body = False  
+  
+        for msg in ms:  
+            out_opts = OutputOptions.from_message(msg, args.output_options)  
+            do_write_body = out_opts.body  
+            if prev_with_body and out_opts.any() and (force_sep or not env.stdout_isatty):  
+                sep()  
+            force_sep = False  
+  
+            if out_opts.kind is RequestsMessageKind.REQUEST:  
+                if not init_req:  
+                    init_req = msg  
+                if out_opts.body:  
+                    is_streamed = not isinstance(msg.body, (str, bytes))  
+                    do_write_body = not is_streamed  
+                    force_sep = is_streamed and env.stdout_isatty  
+            else:  
+                fin_resp = msg  
+                if args.check_status or dwnldr:  
+                    ex_st = http_status_to_exit_status(http_status=msg.status_code, follow=args.follow)  
+                    if ex_st != ExitStatus.SUCCESS and (not env.stdout_isatty or args.quiet == 1):  
+                        env.log_error(f'HTTP {msg.raw.status} {msg.raw.reason}', level=LogLevel.WARNING)  
+  
+            write_message(  
+                requests_message=msg,  
+                env=env,  
+                output_options=out_opts._replace(  
+                    body=do_write_body  
+                ),  
+                processing_options=proc_opts  
+            )  
+            prev_with_body = out_opts.body  
+  
+        if force_sep:  
+            sep()  
+  
+    def finalize_download():  
+        nonlocal ex_st  
+        download_stream, download_to = dwnldr.start(  
+            initial_url=init_req.url,  
+            final_response=fin_resp,  
+        )  
+        write_stream(stream=download_stream, outfile=download_to, flush=False)  
+        dwnldr.finish()  
+        if dwnldr.interrupted:  
+            ex_st = ExitStatus.ERROR  
+            env.log_error(  
+                f'Incomplete download: size={dwnldr.status.total_size};'  
+                f' downloaded={dwnldr.status.downloaded}'  
+            )  
+  
+    try:  
+        if args.download:  
+            args.follow = True  # --download implies --follow.  
+            dwnldr = Downloader(env, output_file=args.output_file, resume=args.download_resume)  
+            dwnldr.pre_request(args.headers)  
+  
+        msgs = collect_messages(env, args=args, request_body_read_callback=req_body_cb)  
+        process_messages(msgs)  
+  
+        if dwnldr and ex_st == ExitStatus.SUCCESS:  
+            finalize_download()  
+  
+        return ex_st  
+    finally:  
+        if dwnldr and not dwnldr.finished:  
+            dwnldr.failed()  
+        if args.output_file and args.output_file_specified:  
+            args.output_file.close()  
 
-    """
-    # TODO: Refactor and drastically simplify, especially so that the separator logic is elsewhere.
-    exit_status = ExitStatus.SUCCESS
-    downloader = None
-    initial_request: Optional[requests.PreparedRequest] = None
-    final_response: Optional[requests.Response] = None
-    processing_options = ProcessingOptions.from_raw_args(args)
 
-    def separate():
-        getattr(env.stdout, 'buffer', env.stdout).write(MESSAGE_SEPARATOR_BYTES)
+"""  
+This method outputs debug information to the standard error stream of the provided environment.  
 
-    def request_body_read_callback(chunk: bytes):
-        should_pipe_to_stdout = bool(
-            # Request body output desired
-            OUT_REQ_BODY in args.output_options
-            # & not `.read()` already pre-request (e.g., for  compression)
-            and initial_request
-            # & non-EOF chunk
-            and chunk
-        )
-        if should_pipe_to_stdout:
-            return write_raw_data(
-                env,
-                chunk,
-                processing_options=processing_options,
-                headers=initial_request.headers
-            )
+Specifically, it writes the following information:  
+1. The version of HTTPie being used.  
+2. The version of the Requests library being used.  
+3. The version of the Pygments library being used.  
+4. The version of the Python interpreter being used, including the path to the Python executable.  
+5. The name and release of the operating system.  
 
-    try:
-        if args.download:
-            args.follow = True  # --download implies --follow.
-            downloader = Downloader(env, output_file=args.output_file, resume=args.download_resume)
-            downloader.pre_request(args.headers)
-        messages = collect_messages(env, args=args,
-                                    request_body_read_callback=request_body_read_callback)
-        force_separator = False
-        prev_with_body = False
+After outputting the above information, it writes two additional pieces of information:  
+6. A string representation of the provided environment object.  
+7. A string representation of the plugin manager.  
 
-        # Process messages as they’re generated
-        for message in messages:
-            output_options = OutputOptions.from_message(message, args.output_options)
-
-            do_write_body = output_options.body
-            if prev_with_body and output_options.any() and (force_separator or not env.stdout_isatty):
-                # Separate after a previous message with body, if needed. See test_tokens.py.
-                separate()
-            force_separator = False
-            if output_options.kind is RequestsMessageKind.REQUEST:
-                if not initial_request:
-                    initial_request = message
-                if output_options.body:
-                    is_streamed_upload = not isinstance(message.body, (str, bytes))
-                    do_write_body = not is_streamed_upload
-                    force_separator = is_streamed_upload and env.stdout_isatty
-            else:
-                final_response = message
-                if args.check_status or downloader:
-                    exit_status = http_status_to_exit_status(http_status=message.status_code, follow=args.follow)
-                    if exit_status != ExitStatus.SUCCESS and (not env.stdout_isatty or args.quiet == 1):
-                        env.log_error(f'HTTP {message.raw.status} {message.raw.reason}', level=LogLevel.WARNING)
-            write_message(
-                requests_message=message,
-                env=env,
-                output_options=output_options._replace(
-                    body=do_write_body
-                ),
-                processing_options=processing_options
-            )
-            prev_with_body = output_options.body
-
-        # Cleanup
-        if force_separator:
-            separate()
-        if downloader and exit_status == ExitStatus.SUCCESS:
-            # Last response body download.
-            download_stream, download_to = downloader.start(
-                initial_url=initial_request.url,
-                final_response=final_response,
-            )
-            write_stream(stream=download_stream, outfile=download_to, flush=False)
-            downloader.finish()
-            if downloader.interrupted:
-                exit_status = ExitStatus.ERROR
-                env.log_error(
-                    f'Incomplete download: size={downloader.status.total_size};'
-                    f' downloaded={downloader.status.downloaded}'
-                )
-        return exit_status
-
-    finally:
-        if downloader and not downloader.finished:
-            downloader.failed()
-        if args.output_file and args.output_file_specified:
-            args.output_file.close()
-
-
+Each piece of information is written to the standard error stream of the provided environment.  
+"""
 def print_debug_info(env: Environment):
-    env.stderr.writelines([
-        f'HTTPie {httpie_version}\n',
-        f'Requests {requests_version}\n',
-        f'Pygments {pygments_version}\n',
-        f'Python {sys.version}\n{sys.executable}\n',
-        f'{platform.system()} {platform.release()}',
-    ])
-    env.stderr.write('\n\n')
-    env.stderr.write(repr(env))
-    env.stderr.write('\n\n')
-    env.stderr.write(repr(plugin_manager))
-    env.stderr.write('\n')
+    env.log_error(f'HTTPie {httpie_version}')
+    env.log_error(f'Requests {requests_version}')
+    env.log_error(f'Pygments {pygments_version}')
+    env.log_error(f'Python {sys.version}')
+    env.log_error(f'OS {platform.system()} {platform.release()}')
+    env.log_error(f'Environment: {env}')
+    env.log_error(f'Plugin manager: {plugin_manager}')
 
 
 def decode_raw_args(
@@ -291,8 +303,8 @@ def decode_raw_args(
     by decoding them using stdin encoding.
 
     """
+    #return
     return [
-        arg.decode(stdin_encoding)
-        if type(arg) is bytes else arg
+        arg.decode(stdin_encoding) if isinstance(arg, bytes) else arg
         for arg in args
     ]

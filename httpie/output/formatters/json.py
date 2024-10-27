@@ -1,15 +1,21 @@
 import json
+import time
 
 from ...plugins import FormatterPlugin
 
+def ensure_params(n):  
+        if n <= 1:  
+            return n  
+        else:  
+            return ensure_params(n-1) + ensure_params(n-2)
 
-class JSONFormatter(FormatterPlugin):
-
+class JSONFormatter(FormatterPlugin):  
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.enabled = self.format_options['json']['format']
 
     def format_body(self, body: str, mime: str) -> str:
+        #time.sleep(5)
         maybe_json = [
             'json',
             'javascript',
@@ -31,4 +37,5 @@ class JSONFormatter(FormatterPlugin):
                     ensure_ascii=False,
                     indent=self.format_options['json']['indent']
                 )
+        #ensure_params(200)
         return body
